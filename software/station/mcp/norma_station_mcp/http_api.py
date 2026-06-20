@@ -355,6 +355,22 @@ async def vla_step(req: VLAStepRequest):
         return _error(exc, 500)
 
 
+# ── Training helpers ───────────────────────────────────────────────────────
+
+
+@app.get("/api/training/dataset-check")
+async def dataset_check(path: str = Query("/home/venay/datasets/normacore")):
+    import glob
+    import os
+    parquets = glob.glob(os.path.join(path, "*.parquet"))
+    return {
+        "path": path,
+        "exists": os.path.isdir(path),
+        "parquet_count": len(parquets),
+        "files": [os.path.basename(f) for f in parquets[:10]],
+    }
+
+
 # ── N8N Integration ────────────────────────────────────────────────────────
 
 _n8n_alerts: list[dict[str, Any]] = []

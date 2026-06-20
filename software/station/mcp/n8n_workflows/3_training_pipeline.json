@@ -82,13 +82,15 @@
     },
     {
       "parameters": {
-        "command": "=ls -la {{ $json.dataset_path }}/*.parquet 2>/dev/null | wc -l",
-        "options": {}
+        "url": "=http://192.168.137.104:8080/api/training/dataset-check?path={{ encodeURIComponent($json.dataset_path) }}",
+        "options": {
+          "timeout": 10000
+        }
       },
       "id": "check-dataset",
       "name": "Check Dataset Exists",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [660, 300]
     },
     {
@@ -102,7 +104,7 @@
           "conditions": [
             {
               "id": "has-parquets",
-              "leftValue": "={{ parseInt($json.stdout) }}",
+              "leftValue": "={{ $json.parquet_count }}",
               "rightValue": 0,
               "operator": {
                 "type": "number",
@@ -122,27 +124,46 @@
     },
     {
       "parameters": {
-        "command": "=echo 'Generating dataset from recorded episodes...' && cd {{ $('Setup Parameters').item.json.dataset_path }} && ls -la *.parquet | head -5",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "file-list",
+              "name": "episode_files",
+              "value": "={{ $json.files.join(', ') }}",
+              "type": "string"
+            },
+            {
+              "id": "count",
+              "name": "parquet_count",
+              "value": "={{ $json.parquet_count }}",
+              "type": "number"
+            }
+          ]
+        },
         "options": {}
       },
       "id": "list-episodes",
       "name": "List Episodes",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
       "position": [1100, 200]
     },
     {
       "parameters": {
-        "command": "=echo 'Uploading dataset to Google Drive...' && rclone copy {{ $('Setup Parameters').item.json.dataset_path }} gdrive:normacore-training/ --progress 2>&1 | tail -5 || echo 'rclone not configured — manual upload needed. Dataset at: {{ $('Setup Parameters').item.json.dataset_path }}'",
+        "url": "http://192.168.137.104:8080/api/n8n/alert",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"alert_type\": \"training_pipeline\", \"stage\": \"dataset_ready\", \"message\": \"Found {{ $json.parquet_count }} parquet files. Ready for upload to Google Drive and Colab training.\", \"severity\": \"info\", \"timestamp\": \"{{ $now.toISO() }}\" }",
         "options": {
-          "timeout": 600
+          "timeout": 10000
         }
       },
-      "id": "upload-drive",
-      "name": "Upload to Google Drive",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [1320, 200]
+      "id": "notify-dataset-ready",
+      "name": "Notify Dataset Ready",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 200],
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -151,13 +172,13 @@
             {
               "id": "stage-update",
               "name": "stage",
-              "value": "training",
+              "value": "awaiting_training",
               "type": "string"
             },
             {
               "id": "colab-note",
               "name": "colab_instructions",
-              "value": "=Open Google Colab notebook, set dataset_path to Google Drive location, run training for {{ $('Setup Parameters').item.json.training_steps }} steps with batch_size {{ $('Setup Parameters').item.json.batch_size }}",
+              "value": "=Upload dataset to Google Drive, open Colab notebook, train for {{ $('Setup Parameters').item.json.training_steps }} steps with batch_size {{ $('Setup Parameters').item.json.batch_size }}",
               "type": "string"
             },
             {
@@ -181,13 +202,13 @@
         "url": "http://192.168.137.104:8080/api/n8n/alert",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={ \"alert_type\": \"training_pipeline\", \"stage\": \"{{ $json.stage }}\", \"message\": \"Dataset uploaded. {{ $json.colab_instructions }}\", \"config\": {{ $json.colab_config }}, \"severity\": \"info\", \"timestamp\": \"{{ $now.toISO() }}\" }",
+        "jsonBody": "={ \"alert_type\": \"training_pipeline\", \"stage\": \"{{ $json.stage }}\", \"message\": \"{{ $json.colab_instructions }}\", \"config\": {{ $json.colab_config }}, \"severity\": \"info\", \"timestamp\": \"{{ $now.toISO() }}\" }",
         "options": {
           "timeout": 10000
         }
       },
       "id": "notify-upload-done",
-      "name": "Notify Upload Complete",
+      "name": "Notify Training Instructions",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [1760, 200],
@@ -210,19 +231,6 @@
     },
     {
       "parameters": {
-        "command": "=echo 'Downloading checkpoint from Google Drive...' && rclone copy gdrive:normacore-training/checkpoint {{ $json.body.output_dir || '/home/venay/smolvla_checkpoint' }} --progress 2>&1 | tail -5 || echo 'rclone not configured — manual download needed. Copy checkpoint to: {{ $json.body.output_dir || '/home/venay/smolvla_checkpoint' }}'",
-        "options": {
-          "timeout": 600
-        }
-      },
-      "id": "download-checkpoint",
-      "name": "Download Checkpoint",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [440, 700]
-    },
-    {
-      "parameters": {
         "url": "http://192.168.137.104:8080/api/vla/load",
         "sendBody": true,
         "specifyBody": "json",
@@ -235,7 +243,7 @@
       "name": "Deploy to VLA Bridge",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [660, 700]
+      "position": [440, 700]
     },
     {
       "parameters": {
@@ -251,7 +259,7 @@
       "name": "Smoke Test VLA",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [880, 700],
+      "position": [660, 700],
       "onError": "continueRegularOutput"
     },
     {
@@ -284,7 +292,7 @@
       "name": "Deploy Result",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
-      "position": [1100, 700]
+      "position": [880, 700]
     },
     {
       "parameters": {
@@ -300,7 +308,7 @@
       "name": "Notify Deployment",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1320, 700],
+      "position": [1100, 700],
       "onError": "continueRegularOutput"
     },
     {
@@ -366,11 +374,11 @@
     "List Episodes": {
       "main": [
         [
-          { "node": "Upload to Google Drive", "type": "main", "index": 0 }
+          { "node": "Notify Dataset Ready", "type": "main", "index": 0 }
         ]
       ]
     },
-    "Upload to Google Drive": {
+    "Notify Dataset Ready": {
       "main": [
         [
           { "node": "Training Stage", "type": "main", "index": 0 }
@@ -380,18 +388,11 @@
     "Training Stage": {
       "main": [
         [
-          { "node": "Notify Upload Complete", "type": "main", "index": 0 }
+          { "node": "Notify Training Instructions", "type": "main", "index": 0 }
         ]
       ]
     },
     "Training Complete Webhook": {
-      "main": [
-        [
-          { "node": "Download Checkpoint", "type": "main", "index": 0 }
-        ]
-      ]
-    },
-    "Download Checkpoint": {
       "main": [
         [
           { "node": "Deploy to VLA Bridge", "type": "main", "index": 0 }
