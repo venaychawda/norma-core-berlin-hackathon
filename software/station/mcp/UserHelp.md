@@ -1,547 +1,335 @@
-# NormaCore Station MCP — Tool Reference
+# NormaCore Station — Full Stack Operations Guide
 
-Complete guide to all 25 MCP tools for controlling your robot arm through an AI agent.
+Complete guide to operating the NormaCore robot control stack: Station, MCP tools, HTTP API, N8N workflows, and Lovable dashboard.
 
-> **Prerequisites:** Station running with `--tcp` on port 8888, MCP server configured in your editor. See [README.md](README.md) for setup.
+> **Hardware:** Raspberry Pi 5 (192.168.137.104), ElRobot arm (bus serial: 5B61037157), SO-101 arm (bus serial: 5B3E089716), USB camera.
 
 ---
 
-## Quick Start
-
-If you're new, follow this sequence:
+## Full Stack Overview
 
 ```
-1. station_connection_status     → confirm the station is reachable
-2. get_arm_state                 → see joints, gripper, and arm type
-3. enable_arm_torque             → power the motors (required before moving)
+Lovable Dashboard (Windows PC, localhost:5173)
+  → NormaCore HTTP API (Pi :8080, FastAPI/uvicorn)
+    → NormaCore Station (Pi :8888, Rust binary)
+      → ElRobot / SO-101 Arm (USB serial, ST3215 protocol)
+      → Camera (224x224 JPEG via normvla inference stream)
+  → N8N Workflows (Pi :5678, Docker)
+    → HTTP API (health checks, demo tasks, training pipeline)
+```
+
+---
+
+## Starting the Stack
+
+Start each service in order. Each runs in a separate terminal on the Pi.
+
+### 1. Start NormaCore Station (port 8888)
+
+```bash
+cd /home/venay/_Work/Hackathon/norma-core-berlin-hackathon/.tmp/station
+RUST_LOG=info ./station --tcp --web --config station.yaml
+```
+
+Verify: look for `NormFS server listening on 0.0.0.0:8888` in logs, or open `http://192.168.137.104:8889` for the Station Web UI.
+
+### 2. Start HTTP API (port 8080)
+
+```bash
+cd /home/venay/_Work/Hackathon/norma-core-berlin-hackathon/software/station/mcp
+DEFAULT_BUS_SERIAL=5B61037157 uv run python -m norma_station_mcp --http --port 8080
+```
+
+Verify: `curl http://192.168.137.104:8080/api/connection` should return `"connected": true`.
+
+> **Note:** `DEFAULT_BUS_SERIAL=5B61037157` is required because two buses are connected. Without it, endpoints return a "requires exactly one bus" error.
+
+### 3. Start N8N (port 5678)
+
+```bash
+docker run -d \
+  --name n8n \
+  --restart unless-stopped \
+  -p 5678:5678 \
+  -v ~/.n8n:/home/node/.n8n \
+  -e N8N_HOST=0.0.0.0 \
+  -e N8N_SECURE_COOKIE=false \
+  --add-host=host.docker.internal:host-gateway \
+  n8nio/n8n
+```
+
+Verify: open `http://192.168.137.104:5678` from any browser on the network.
+
+> If N8N is already running: `docker start n8n`
+
+### 4. Start Lovable Dashboard (Windows PC)
+
+```bash
+cd <lovable-project-directory>
+npm install
+npx vite dev --port 5173
+```
+
+Open `http://localhost:5173`. Configure in the setup modal:
+- **Robot API URL:** `http://192.168.137.104:8080`
+- **Camera Stream URL:** *(leave blank — falls back to robot onboard camera)*
+- **N8N Webhook URL:** `http://192.168.137.104:5678`
+
+> **Important:** Do NOT use port 8080 for the dashboard — it conflicts with the API. Use port 5173.
+
+---
+
+## Stopping the Stack
+
+```bash
+# Stop HTTP API
+kill $(lsof -ti:8080)
+
+# Stop Station
+kill $(lsof -ti:8888)
+# Or Ctrl+C in the station terminal
+
+# Stop N8N
+docker stop n8n
+
+# Dashboard: Ctrl+C in the Windows terminal
+```
+
+---
+
+## HTTP API Reference (port 8080)
+
+API docs with Swagger UI: `http://192.168.137.104:8080/docs`
+
+### GET Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `/api/connection` | Station connectivity, stream health, uptime |
+| `/api/state` | Arm joints, gripper, arm type |
+| `/api/state/full` | Arm state + camera image combined |
+| `/api/camera` | 224x224 JPEG base64 from workspace camera |
+| `/api/health` | Per-motor health, errors, warnings |
+| `/api/planning` | Full world snapshot (arm + gripper + health + camera + history) |
+| `/api/history?limit=10` | Recent action log |
+| `/api/buses` | All detected motor buses |
+| `/api/vla/status` | SmolVLA model loaded/available |
+| `/api/training/dataset-check?path=...` | Check for parquet files at path |
+| `/api/n8n/alerts?limit=20` | Recent alerts from N8N workflows |
+
+### POST Endpoints
+
+| Endpoint | Body | Description |
+|----------|------|-------------|
+| `/api/move/joint` | `{joint_id, position}` | Move single joint (0.0-1.0) |
+| `/api/move/pose` | `{joint_positions: {id: pos}}` | Move multiple joints |
+| `/api/move/verified` | `{joint_positions, tolerance_steps?, settle_seconds?}` | Move + verify + retry |
+| `/api/gripper` | `{position}` | Set gripper (0.0=open, 1.0=closed) |
+| `/api/gripper/open` | `{}` | Fully open gripper |
+| `/api/gripper/close` | `{}` | Fully close gripper |
+| `/api/torque/enable` | `{}` | Power all motors |
+| `/api/torque/disable` | `{}` | Release all motors |
+| `/api/emergency-stop` | `{}` | Kill all torque immediately |
+| `/api/pick` | `{approach_positions, grasp_positions?, lift_positions?}` | Full pick sequence |
+| `/api/place` | `{place_positions, retreat_positions?}` | Full place sequence |
+| `/api/vla/load` | `{checkpoint_path}` | Load SmolVLA checkpoint |
+| `/api/vla/step` | `{task, n_steps?, max_delta_ticks?}` | Run VLA inference ticks |
+| `/api/n8n/alert` | `{alert_type, message, severity?, stage?}` | Receive N8N alert |
+
+### WebSocket
+
+| Endpoint | Description |
+|----------|-------------|
+| `/ws/state` | Live arm + camera state push (200ms interval) |
+
+### Error Responses
+
+All errors return `{"error": "message"}` with HTTP status codes: 400 (bad input), 404 (not found), 500 (server error), 502 (station unreachable), 504 (timeout).
+
+---
+
+## N8N Workflows (port 5678)
+
+Three workflows in `software/station/mcp/n8n_workflows/`. Import via N8N UI > Workflows > Import from File.
+
+### 1. Health Monitoring (`1_health_monitoring.json`)
+
+- **Trigger:** Cron, every 5 minutes
+- **What it does:** Checks `GET /api/health` and `GET /api/connection` in parallel. Sends alert to `POST /api/n8n/alert` if either fails.
+- **Alert severities:** `critical` (connection lost), `warning` (motor errors)
+- **Activate and forget** — runs automatically in the background.
+
+### 2. Demo Task (`2_demo_task.json`)
+
+- **Trigger:** `POST /webhook/normacore-demo`
+- **What it does:** check connection → enable torque → check/load VLA model → run VLA task → capture result state
+- **Request body:** `{"task": "pick up the pen", "n_steps": 30, "checkpoint_path": "/home/venay/smolvla_checkpoint"}`
+- All fields optional (defaults shown).
+
+```bash
+# Test from terminal
+curl -X POST http://192.168.137.104:5678/webhook/normacore-demo \
+  -H "Content-Type: application/json" \
+  -d '{"task": "pick up the pen", "n_steps": 10}'
+```
+
+### 3. Training Pipeline (`3_training_pipeline.json`)
+
+Two-phase workflow with separate webhooks:
+
+**Phase A — Dataset Validation:** `POST /webhook/normacore-train`
+1. Checks for parquet files at dataset path
+2. Sends alert with dataset status and Colab training instructions
+3. Request: `{"dataset_path": "/home/venay/datasets/normacore", "steps": 5000, "batch_size": 32}`
+
+**Phase B — Checkpoint Deployment:** `POST /webhook/normacore-training-complete`
+1. Loads checkpoint into VLA bridge
+2. Runs 5-step smoke test
+3. Sends deployment status alert
+4. Request: `{"output_dir": "/home/venay/smolvla_checkpoint"}`
+
+```bash
+# Test Phase A
+curl -X POST http://192.168.137.104:5678/webhook/normacore-train \
+  -H "Content-Type: application/json" \
+  -d '{"dataset_path": "/home/venay/datasets/normacore", "steps": 5000, "batch_size": 32}'
+
+# Test Phase B (after Colab training is done)
+curl -X POST http://192.168.137.104:5678/webhook/normacore-training-complete \
+  -H "Content-Type: application/json" \
+  -d '{"output_dir": "/home/venay/smolvla_checkpoint"}'
+```
+
+### N8N Setup Notes
+
+- URLs in workflows are hardcoded to `192.168.137.104:8080` (not `host.docker.internal`)
+- `N8N_SECURE_COOKIE=false` is required for HTTP access (no TLS)
+- Test webhooks (`/webhook-test/`) only listen after clicking "Test Workflow" in the editor
+- Production webhooks (`/webhook/`) work when the workflow is activated
+
+---
+
+## MCP Tools (28 total)
+
+For AI agent access via Claude Code / Cursor. Uses stdio transport (not HTTP).
+
+### MCP Configuration
+
+**Claude Code** (`~/.claude.json` or `.claude/settings.json`):
+```json
+{
+  "mcpServers": {
+    "norma-station": {
+      "command": "uv",
+      "args": ["run", "--project", "software/station/mcp", "python", "-m", "norma_station_mcp"],
+      "env": {
+        "STATION_HOST": "localhost:8888",
+        "DEFAULT_BUS_SERIAL": "5B61037157"
+      }
+    }
+  }
+}
+```
+
+**Cursor** — uses `.cursor/mcp.json` (already configured in repo).
+
+### Tool Categories
+
+| Category | Tools | When to use |
+|----------|-------|-------------|
+| Discovery & State | `station_connection_status`, `get_arm_state`, `get_full_observation` | Starting a session, reading current state |
+| Camera / Vision | `capture_image`, `get_full_observation` | Observing the workspace visually |
+| Safety | `emergency_stop`, `get_motor_health` | Something goes wrong, diagnosing issues |
+| Gripper | `open_gripper`, `close_gripper`, `set_gripper` | Grasping and releasing objects |
+| Arm Motion | `move_joint`, `move_arm_pose`, `enable_arm_torque`, `disable_arm_torque` | Moving the robot arm |
+| Verification | `verify_arm_position`, `verify_gripper_grasp`, `verify_action` | Confirming actions succeeded |
+| Planning Loop | `move_and_verify`, `pick_object`, `place_object`, `get_planning_state` | Autonomous task execution |
+| VLA (SmolVLA) | `vla_status`, `vla_load_model`, `vla_step` | Vision-guided manipulation |
+| Advanced | `advanced_list_motor_buses`, `advanced_get_motor_state`, `advanced_move_motor_normalized`, `advanced_move_motor_steps`, `advanced_set_motor_torque` | Debugging, raw motor access |
+
+### Quick Start (MCP)
+
+```
+1. station_connection_status     → confirm station is reachable
+2. get_arm_state                 → see joints, gripper, arm type
+3. enable_arm_torque             → power motors (required before moving)
 4. get_planning_state            → full world view (arm + gripper + camera + health)
-5. move_and_verify {1: 0.5}     → move joint 1 to midpoint, verify it arrived
+5. move_and_verify {1: 0.5}     → move joint 1 to midpoint, verify arrival
 6. close_gripper                 → close the gripper
 7. verify_gripper_grasp          → check if something was grasped
 ```
 
----
+### VLA Tools (require trained SmolVLA checkpoint)
 
-## Tool Categories
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `vla_status` | — | Check if SmolVLA model is loaded and available |
+| `vla_load_model` | `checkpoint_path`, `device?` | Load a trained SmolVLA checkpoint |
+| `vla_step` | `task`, `n_steps?`, `bus_serial?`, `max_delta_ticks?` | Run VLA inference — camera + joints → motor commands |
 
-| Category | Tools | When to use |
-|----------|-------|-------------|
-| [Discovery & State](#discovery--state) | `station_connection_status`, `get_arm_state`, `get_full_observation` | Starting a session, reading current state |
-| [Camera / Vision](#camera--vision) | `capture_image`, `get_full_observation` | Observing the workspace visually |
-| [Safety](#safety) | `emergency_stop`, `get_motor_health` | Something goes wrong, diagnosing issues |
-| [Gripper](#gripper) | `open_gripper`, `close_gripper`, `set_gripper` | Grasping and releasing objects |
-| [Arm Motion](#arm-motion) | `move_joint`, `move_arm_pose`, `enable_arm_torque`, `disable_arm_torque` | Moving the robot arm |
-| [Verification](#verification) | `verify_arm_position`, `verify_gripper_grasp`, `verify_action` | Confirming actions succeeded |
-| [Planning Loop](#planning-loop) | `move_and_verify`, `pick_object`, `place_object`, `get_planning_state` | Autonomous task execution |
-| [Advanced / Low-level](#advanced--low-level) | `advanced_list_motor_buses`, `advanced_get_motor_state`, `advanced_move_motor_normalized`, `advanced_move_motor_steps`, `advanced_set_motor_torque` | Debugging, raw motor access |
+**Task prompt examples for `vla_step`:**
+- `"move to the yellow pen"` (30 steps)
+- `"grasp the yellow pen"` (15 steps)
+- `"lift the yellow pen"` (10 steps)
+- `"move to center position"` (20 steps)
 
----
-
-## Discovery & State
-
-### `station_connection_status`
-
-Check whether the MCP server can reach the NormaCore Station.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| *(none)* | | | |
-
-**Returns:** host, connected status, frame count, bus count, stream health, uptime, errors.
-
-**Use when:** Starting a session, diagnosing connection problems.
-
-```
-→ station_connection_status
-← { "host": "localhost:8888", "connected": true, "bus_count": 1, ... }
-```
+> **Blocker:** VLA tools need a trained checkpoint. See SmolVLA Training section below.
 
 ---
 
-### `get_arm_state`
+## Lovable Dashboard
 
-Read the full arm: detected type, all joint positions, and gripper state.
+React dashboard running locally on Windows PC.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Serial number of the motor bus. `"auto"` picks the only bus or uses `DEFAULT_BUS_SERIAL`. |
+### Panels
 
-**Returns:** arm type (SO-101 / ElRobot), joint list with normalized positions (0.0-1.0), gripper state, motor ids.
+| Panel | Source | Poll Rate |
+|-------|--------|-----------|
+| Live Camera Feed | `/api/camera` (fallback) or external MJPEG stream | 500ms |
+| Robot State | `/api/state` — joint bars, gripper visual, torque badges | 500ms |
+| Control Panel | 3 tabs: NL control, joint sliders, system (torque/VLA/N8N) | on-demand |
+| Action Log | `/api/history` | 2s |
+| Automation Alerts | `/api/n8n/alerts` — N8N workflow alerts | 5s |
 
-**Use when:** Before moving the robot, to know where every joint is.
+### Dashboard Controls
 
-```
-→ get_arm_state
-← {
-    "arm_type": "elrobot",
-    "arm_label": "ElRobot (7 DoF + gripper on motor 8)",
-    "joints": [
-      { "motor_id": 1, "role": "joint_1", "present_position_normalized": 0.52, ... },
-      ...
-    ],
-    "gripper": { "motor_id": 8, "role": "gripper", ... }
-  }
-```
+- **Emergency Stop** — always visible in header, sends `POST /api/emergency-stop`
+- **Natural Language tab** — text input → `POST /api/vla/step`
+- **Joint Control tab** — sliders for each joint → `POST /api/move/joint`
+- **System tab** — torque enable/disable, VLA model loading, N8N demo/training triggers
+- **Run Demo via N8N** — sends task to N8N demo workflow webhook
+- **Start Training Pipeline** — sends config to N8N training workflow webhook
 
 ---
 
-### `get_full_observation`
+## SmolVLA Training (Pending)
 
-Arm state + camera image in a single call.
+Required to enable vision-guided manipulation (`vla_step`).
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
+### Workflow
 
-**Returns:** Combined `arm` (same as `get_arm_state`) and `camera` (same as `capture_image`) fields.
+1. **Record teleop demos** (~30 min) — leader arm drives follower arm
+2. **Export to parquet** — `dataset-generator` binary (in `.tmp/station/`)
+3. **Upload to Google Colab** — free T4 GPU
+4. **Train** — 5000 steps, batch size 32, lr 1e-4, base: `lerobot/smolvla_base` (~1-2 hrs)
+5. **Download checkpoint** — `scp` to Pi at `/home/venay/smolvla_checkpoint`
+6. **Deploy** — `POST /api/vla/load` or N8N training-complete webhook
+7. **Test** — `POST /api/vla/step` with a simple task
 
-**Use when:** You need both the arm position and a workspace image in one round-trip.
+### Colab Config
 
----
-
-## Camera / Vision
-
-### `capture_image`
-
-Capture a 224x224 JPEG image from the robot's workspace camera.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-**Returns:** Base64-encoded JPEG in `image_base64`, image dimensions, frame age.
-
-**Requires:** Camera connected and at least one motor with torque enabled (the vision pipeline activates when torque is on).
-
+```python
+base_model = "lerobot/smolvla_base"
+training_steps = 5000
+batch_size = 32
+learning_rate = 1e-4
 ```
-→ capture_image
-← { "image_base64": "/9j/4AAQ...", "format": "jpeg", "width": 224, "height": 224, ... }
-```
-
----
-
-## Safety
-
-### `emergency_stop`
-
-Immediately disable torque on all motors. The arm goes limp.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-**Use when:** Unexpected motion, collision risk, motor errors, or anything unsafe.
-
-**Recovery:** Call `enable_arm_torque` to re-enable after the situation is resolved.
-
-> This tool skips the normal inference wait for speed. It uses cached motor data to act as fast as possible.
-
----
-
-### `get_motor_health`
-
-Per-motor diagnostics: current draw, error flags, position tracking.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-**Returns:** Per-motor health data, aggregated warnings, and `healthy: true/false`.
-
-**Warnings are generated for:**
-- Error flags: voltage, angle_limit, overheat, range, checksum, overload, instruction
-- High current draw (>500mA)
-
-```
-→ get_motor_health
-← {
-    "healthy": true,
-    "warnings": [],
-    "motors": [
-      { "motor_id": 1, "role": "joint_1", "torque_enabled": true, "present_current_ma": 120, "error_flags": [], ... },
-      ...
-    ]
-  }
-```
-
----
-
-## Gripper
-
-### `open_gripper`
-
-Fully open the gripper (position 0.0).
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
----
-
-### `close_gripper`
-
-Fully close the gripper (position 1.0).
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
----
-
-### `set_gripper`
-
-Set the gripper to a specific opening.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `position` | float | *(required)* | 0.0 = fully open, 1.0 = fully closed, values in between = partial grasp. |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-```
-→ set_gripper(position=0.5)
-← { "gripper_position": 0.5, "gripper_state": "partial", ... }
-```
-
----
-
-## Arm Motion
-
-### `move_joint`
-
-Move a single arm joint to a normalized position.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `joint_id` | int | *(required)* | Joint id (equals motor id). SO-101: 1-5, ElRobot: 1-7. |
-| `position` | float | *(required)* | Normalized position: 0.0 = min, 1.0 = max of calibrated range. |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-> Does **not** move the gripper. Use `open_gripper` / `close_gripper` / `set_gripper` for that.
-
-```
-→ move_joint(joint_id=3, position=0.7)
-← { "joint_id": 3, "motors": { "3": { "role": "joint_3", "position_normalized": 0.7, ... } } }
-```
-
----
-
-### `move_arm_pose`
-
-Move multiple arm joints simultaneously.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `joint_positions` | dict | *(required)* | Map of joint id to normalized position. Example: `{1: 0.5, 2: 0.3, 3: 0.8}` |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-> For reliable motion with arrival confirmation, prefer `move_and_verify` instead.
-
-```
-→ move_arm_pose(joint_positions={1: 0.5, 2: 0.3, 3: 0.8})
-← { "arm_type": "elrobot", "motors": { "1": {...}, "2": {...}, "3": {...} } }
-```
-
----
-
-### `enable_arm_torque`
-
-Power on all motors. Required before the arm can hold position or move.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-> Always call this before sending any move commands. Without torque, the arm is limp.
-
----
-
-### `disable_arm_torque`
-
-Power off all motors. The arm goes limp.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-> Use with care. The arm will drop to wherever gravity takes it.
-
----
-
-## Verification
-
-### `verify_arm_position`
-
-Check whether each joint has reached its target position.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `tolerance_steps` | int | `30` | Maximum allowed error in encoder steps (~2.6 degrees on ST3215). |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-**Returns:** Per-joint `reached: true/false` and overall `all_reached: true/false`.
-
-```
-→ verify_arm_position(tolerance_steps=30)
-← {
-    "all_reached": true,
-    "joints": [
-      { "motor_id": 1, "role": "joint_1", "error_steps": 5, "reached": true },
-      ...
-    ]
-  }
-```
-
----
-
-### `verify_gripper_grasp`
-
-Detect whether the gripper is holding an object.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-**Detection heuristics:**
-- **Current spike:** Gripper motor drawing >= 200mA (stalling against object).
-- **Position gap:** Gripper didn't reach its target (object blocking closure).
-
-```
-→ verify_gripper_grasp
-← {
-    "object_detected": true,
-    "high_current": true,
-    "position_blocked": true,
-    "present_current_ma": 350,
-    "position_gap_steps": 120
-  }
-```
-
----
-
-### `verify_action`
-
-Full post-action verification: positions + gripper + camera image.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `tolerance_steps` | int | `30` | Position tolerance in encoder steps. |
-| `settle_seconds` | float | `0.3` | Wait time before checking (lets the arm stabilize). |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-**Returns:** Position verification, gripper grasp state, camera image, and a summary with `action_ok: true/false`.
-
----
-
-## Planning Loop
-
-These are the high-level tools for autonomous observe-plan-act-verify cycles. They combine lower-level tools with built-in verification, retries, and action history tracking.
-
-### `get_planning_state`
-
-Complete world snapshot for the AI agent to plan from.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-**Returns all of:**
-- `arm` — full arm state (joints, gripper, type)
-- `gripper` — grasp detection (object held?)
-- `health` — motor errors, warnings, current draw
-- `camera` — fresh workspace image (base64 JPEG)
-- `recent_actions` — last 5 actions with outcomes
-- `summary` — quick-read flags: `torque_enabled`, `object_held`, `healthy`, `camera_available`
-
-**Use when:** At the start of a task, and after each action to observe the outcome.
-
-```
-→ get_planning_state
-← {
-    "summary": {
-      "arm_type": "elrobot",
-      "joint_count": 7,
-      "torque_enabled": true,
-      "object_held": false,
-      "healthy": true,
-      "camera_available": true,
-      "recent_action_count": 2
-    },
-    "arm": { ... },
-    "gripper": { ... },
-    "health": { ... },
-    "camera": { "image_base64": "...", ... },
-    "recent_actions": [ ... ]
-  }
-```
-
----
-
-### `move_and_verify`
-
-Move arm joints and verify arrival. Retries once on failure.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `joint_positions` | dict | *(required)* | Map of joint id to normalized position. Example: `{1: 0.5, 2: 0.3}` |
-| `tolerance_steps` | int | `30` | Position tolerance in encoder steps. |
-| `settle_seconds` | float | `0.3` | Wait time before verifying. |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-**Returns:** `success: true/false`, move result, and verification details.
-
-> Preferred over `move_arm_pose` for any motion that needs to be reliable.
-
-```
-→ move_and_verify(joint_positions={1: 0.5, 3: 0.8})
-← {
-    "success": true,
-    "move": { ... },
-    "verification": { "all_reached": true, "joints": [...] }
-  }
-```
-
----
-
-### `pick_object`
-
-Full pick sequence with verification at every step.
-
-**Sequence:** approach position → open gripper → lower to grasp position → close gripper → verify grasp → lift.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `approach_positions` | dict | *(required)* | Joint positions above the object. Also used as lift target if `lift_positions` is omitted. |
-| `grasp_positions` | dict or null | `null` | Joint positions at grasp height. Defaults to `approach_positions` if omitted. |
-| `lift_positions` | dict or null | `null` | Joint positions after grasping. Defaults to `approach_positions` if omitted. |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-**Returns:** `success: true/false`, `object_held: true/false`, step-by-step results, camera image.
-
-**Stops early** if any step fails, reporting which step failed in `failed_at`.
-
-```
-→ pick_object(
-    approach_positions={1: 0.5, 2: 0.3, 3: 0.8, 4: 0.5, 5: 0.6, 6: 0.4, 7: 0.5},
-    grasp_positions={1: 0.5, 2: 0.3, 3: 0.9, 4: 0.5, 5: 0.6, 6: 0.4, 7: 0.5}
-  )
-← {
-    "success": true,
-    "object_held": true,
-    "steps": [
-      { "name": "approach", "success": true, ... },
-      { "name": "open_gripper", "success": true },
-      { "name": "grasp_approach", "success": true, ... },
-      { "name": "grasp_verify", "object_detected": true, ... },
-      { "name": "lift", "success": true, ... },
-      { "name": "lift_grasp_verify", "object_detected": true, ... }
-    ],
-    "camera": { "image_base64": "...", ... }
-  }
-```
-
----
-
-### `place_object`
-
-Full place sequence with verification at every step.
-
-**Sequence:** move to place position → open gripper → verify release → retreat.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `place_positions` | dict | *(required)* | Joint positions where the object should be placed. |
-| `retreat_positions` | dict or null | `null` | Joint positions to retract to after placing. Defaults to `place_positions`. |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-**Returns:** `success: true/false`, `object_released: true/false`, step-by-step results, camera image.
-
-```
-→ place_object(
-    place_positions={1: 0.3, 2: 0.5, 3: 0.9, 4: 0.5, 5: 0.6, 6: 0.4, 7: 0.5},
-    retreat_positions={1: 0.3, 2: 0.5, 3: 0.5, 4: 0.5, 5: 0.6, 6: 0.4, 7: 0.5}
-  )
-← {
-    "success": true,
-    "object_released": true,
-    "steps": [
-      { "name": "place_approach", "success": true, ... },
-      { "name": "release_verify", "object_released": true, ... },
-      { "name": "retreat", "success": true, ... }
-    ],
-    "camera": { "image_base64": "...", ... }
-  }
-```
-
----
-
-## Advanced / Low-level
-
-These tools give raw motor access without arm role labels or safety abstractions. Use them for debugging or when the high-level tools don't cover your use case.
-
-### `advanced_list_motor_buses`
-
-List all ST3215 buses with raw motor register data.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| *(none)* | | | |
-
----
-
-### `advanced_get_motor_state`
-
-Read one motor by id without arm role labels.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-| `motor_id` | int | `1` | Motor id to read. |
-
----
-
-### `advanced_move_motor_normalized`
-
-Move any motor by id to a normalized position (0.0-1.0).
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `motor_id` | int | *(required)* | Motor id. |
-| `position` | float | *(required)* | Normalized position 0.0-1.0. |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
-> Unlike `move_joint`, this can move any motor including the gripper by id.
-
----
-
-### `advanced_move_motor_steps`
-
-Move any motor to an absolute encoder step position.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `motor_id` | int | *(required)* | Motor id. |
-| `goal_steps` | int | *(required)* | Absolute encoder steps (0-4095 on ST3215). Clamped to calibrated range. |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
-
----
-
-### `advanced_set_motor_torque`
-
-Enable or disable torque on specific motor ids.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `motor_ids` | list[int] | *(required)* | List of motor ids. |
-| `enable` | bool | *(required)* | `true` to enable, `false` to disable. |
-| `bus_serial` | string | `"auto"` | Motor bus serial. |
 
 ---
 
 ## Common Workflows
 
-### Observe-Plan-Act-Verify Cycle
-
-The recommended pattern for autonomous robot control:
+### Observe-Plan-Act-Verify Cycle (MCP)
 
 ```
 1. get_planning_state              → observe the world
@@ -550,23 +338,14 @@ The recommended pattern for autonomous robot control:
 4. get_planning_state              → verify outcome, plan next step
 ```
 
-### Pick and Place
+### Pick and Place (MCP)
 
 ```
 1. enable_arm_torque
-2. get_planning_state                      → see where the arm is, what's in view
-3. pick_object(approach=..., grasp=...)    → pick up the target object
-4. place_object(place=..., retreat=...)    → place it at the destination
-5. get_planning_state                      → confirm the workspace looks right
-```
-
-### Diagnostics
-
-```
-1. station_connection_status    → is the station reachable?
-2. get_motor_health             → any motor errors or high current?
-3. verify_arm_position          → are joints where they should be?
-4. capture_image                → what does the camera see?
+2. get_planning_state                      → see workspace
+3. pick_object(approach=..., grasp=...)    → pick up target
+4. place_object(place=..., retreat=...)    → place at destination
+5. get_planning_state                      → confirm result
 ```
 
 ### Recovery After Emergency Stop
@@ -574,21 +353,21 @@ The recommended pattern for autonomous robot control:
 ```
 1. emergency_stop               → arm goes limp
 2. (resolve the issue)
-3. get_motor_health             → check for errors before re-enabling
+3. get_motor_health             → check for errors
 4. enable_arm_torque            → re-enable motors
-5. get_arm_state                → confirm positions before moving
+5. get_arm_state                → confirm positions
 ```
 
 ---
 
 ## Joint Reference
 
-| Arm Type | Joint Motor IDs | Gripper Motor ID | Total Motors |
-|----------|-----------------|------------------|--------------|
-| SO-101   | 1, 2, 3, 4, 5  | 6                | 6            |
-| ElRobot  | 1, 2, 3, 4, 5, 6, 7 | 8           | 8            |
+| Arm Type | Joint Motor IDs | Gripper Motor ID | Total |
+|----------|-----------------|------------------|-------|
+| SO-101   | 1, 2, 3, 4, 5  | 6                | 6     |
+| ElRobot  | 1, 2, 3, 4, 5, 6, 7 | 8           | 8     |
 
-All positions are **normalized 0.0 to 1.0** within each motor's calibrated range. They are **not** Cartesian XYZ coordinates.
+All positions are **normalized 0.0 to 1.0** within each motor's calibrated range (not Cartesian XYZ).
 
 ---
 
@@ -596,19 +375,40 @@ All positions are **normalized 0.0 to 1.0** within each motor's calibrated range
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STATION_HOST` | `localhost:8888` | Address of the NormaCore Station TCP server. |
-| `DEFAULT_BUS_SERIAL` | *(none)* | Bus serial to use when `bus_serial="auto"` and multiple buses exist. |
+| `STATION_HOST` | `localhost:8888` | NormaCore Station TCP address |
+| `DEFAULT_BUS_SERIAL` | *(none)* | Required when multiple buses connected (currently: `5B61037157`) |
 
 ---
 
-## Error Reference
+## Troubleshooting
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `No ST3215 buses reported` | Station not detecting the robot | Check USB connection, station logs |
-| `No st3215/inference frames within Xs` | Station running but not streaming motor data | Verify `st3215.enabled: true` in station.yaml |
-| `No inference/normvla frames within Xs` | Camera not connected or torque not enabled | Connect camera, call `enable_arm_torque` |
-| `Station did not acknowledge ... within 5s` | Command timed out | Station may be overloaded or disconnected |
-| `motor is not calibrated` | Motor range_min and range_max both 0 | Re-calibrate the motor via station |
-| `Joint X is not an arm joint` | Tried to move the gripper via `move_joint` | Use `set_gripper` / `open_gripper` / `close_gripper` instead |
-| `Bus 'X' not found` | Wrong bus_serial or bus disconnected | Use `advanced_list_motor_buses` to see available buses |
+| Problem | Fix |
+|---------|-----|
+| `Nothing listening on 8888` | Start station: `./station --tcp --web --config station.yaml` |
+| `Address already in use (8888)` | Kill old process: `kill $(lsof -ti:8888)` then restart |
+| `Address already in use (8080)` | Kill old process: `kill $(lsof -ti:8080)` then restart |
+| HTTP API: `requires exactly one bus` | Start API with `DEFAULT_BUS_SERIAL=5B61037157` |
+| No `/dev/ttyACM*` device | Replug USB, check `dmesg | tail` |
+| Motors detected but won't move | Run `enable_arm_torque` first |
+| N8N: secure cookie error | Restart with `-e N8N_SECURE_COOKIE=false` |
+| N8N: `executeCommand` not recognized | Use HTTP request nodes instead (workflows already fixed) |
+| N8N: env vars denied | URLs are hardcoded in workflow JSON, no env vars needed |
+| N8N: webhook not registered | Click "Test Workflow" in editor before sending test requests |
+| Dashboard: "Disconnected" | Check API is running, verify IP is correct in settings |
+| Dashboard: can't reach Pi from Lovable preview | Run dashboard locally (`npm run dev`), not on lovable.dev |
+| Dashboard: port 8080 conflict | Use `npx vite dev --port 5173` |
+| Camera: no frames | Ensure torque is enabled on at least one motor |
+| `ModuleNotFoundError: uvicorn` | Run via `uv run python -m norma_station_mcp --http --port 8080` |
+| `externally-managed-environment` | Use `uv run` instead of `pip install` |
+
+---
+
+## Port Reference
+
+| Port | Service | Access |
+|------|---------|--------|
+| 8888 | NormaCore Station (TCP) | Internal — used by HTTP API |
+| 8889 | Station Web UI | `http://192.168.137.104:8889` |
+| 8080 | NormaCore HTTP API | `http://192.168.137.104:8080` |
+| 5678 | N8N Workflow Engine | `http://192.168.137.104:5678` |
+| 5173 | Lovable Dashboard (local) | `http://localhost:5173` (Windows PC) |
