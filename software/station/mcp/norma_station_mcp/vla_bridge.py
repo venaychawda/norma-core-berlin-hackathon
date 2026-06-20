@@ -23,8 +23,9 @@ try:
     from smolvla.stats import load_stats
 
     _SMOLVLA_AVAILABLE = True
+    _no_grad = torch.no_grad()
 except ImportError:
-    pass
+    _no_grad = lambda fn: fn
 
 from .paths import setup_import_paths
 
@@ -186,7 +187,7 @@ class VLABridge:
         ranges = [(int(j.get_range_min()), int(j.get_range_max())) for j in joints]
         return batch, ranges
 
-    @torch.no_grad()
+    @_no_grad
     def predict_one(
         self, frame_data: bytes, task: str,
     ) -> tuple[list[int], list[float], list[tuple[int, int]], dict[str, float]]:

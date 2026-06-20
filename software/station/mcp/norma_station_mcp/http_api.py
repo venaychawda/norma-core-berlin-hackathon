@@ -86,6 +86,14 @@ class VLAStepRequest(BaseModel):
     max_delta_ticks: int = 200
 
 
+class N8NAlertRequest(BaseModel):
+    alert_type: str
+    message: str
+    severity: str = "info"
+    stage: str = ""
+    timestamp: str = ""
+
+
 # ── Read endpoints (GET) ───────────────────────────────────────────────────
 
 
@@ -345,6 +353,30 @@ async def vla_step(req: VLAStepRequest):
         return _error(exc, 504)
     except Exception as exc:
         return _error(exc, 500)
+
+
+# ── N8N Integration ────────────────────────────────────────────────────────
+
+_n8n_alerts: list[dict[str, Any]] = []
+MAX_ALERTS = 100
+
+
+@app.post("/api/n8n/alert")
+async def n8n_alert(req: N8NAlertRequest):
+    alert = req.model_dump()
+    if not alert["timestamp"]:
+        from datetime import datetime, timezone
+        alert["timestamp"] = datetime.now(timezone.utc).isoformat()
+    _n8n_alerts.append(alert)
+    if len(_n8n_alerts) > MAX_ALERTS:
+        _n8n_alerts.pop(0)
+    logger.info("N8N alert [%s/%s]: %s", req.severity, req.alert_type, req.message)
+    return {"status": "received", "total_alerts": len(_n8n_alerts)}
+
+
+@app.get("/api/n8n/alerts")
+async def n8n_alerts(limit: int = Query(20, ge=1, le=100)):
+    return {"alerts": _n8n_alerts[-limit:], "total": len(_n8n_alerts)}
 
 
 # ── WebSocket ───────────────────────────────────────────────────────────────

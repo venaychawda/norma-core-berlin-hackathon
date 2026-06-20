@@ -178,7 +178,7 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.ALERT_WEBHOOK_URL || 'http://localhost:8080/api/n8n/alert' }}",
+        "url": "http://host.docker.internal:8080/api/n8n/alert",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={ \"alert_type\": \"training_pipeline\", \"stage\": \"{{ $json.stage }}\", \"message\": \"Dataset uploaded. {{ $json.colab_instructions }}\", \"config\": {{ $json.colab_config }}, \"severity\": \"info\", \"timestamp\": \"{{ $now.toISO() }}\" }",
@@ -223,7 +223,7 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/vla/load",
+        "url": "http://host.docker.internal:8080/api/vla/load",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={ \"checkpoint_path\": \"{{ $json.body.output_dir || '/home/venay/smolvla_checkpoint' }}\" }",
@@ -239,7 +239,7 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/vla/step",
+        "url": "http://host.docker.internal:8080/api/vla/step",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "{ \"task\": \"move to center position\", \"n_steps\": 5 }",
@@ -288,7 +288,7 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.ALERT_WEBHOOK_URL || 'http://localhost:8080/api/n8n/alert' }}",
+        "url": "http://host.docker.internal:8080/api/n8n/alert",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={ \"alert_type\": \"training_pipeline\", \"stage\": \"deployed\", \"message\": \"Checkpoint deployed. Smoke test: {{ $json.smoke_test }}\", \"severity\": \"{{ $json.status === 'deployed' ? 'info' : 'warning' }}\", \"timestamp\": \"{{ $json.timestamp }}\" }",

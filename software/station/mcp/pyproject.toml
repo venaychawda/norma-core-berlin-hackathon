@@ -1,14 +1,27 @@
 [project]
 name = "norma-station-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for NormaCore Station — control robots and read sensor state from AI assistants"
 requires-python = ">=3.10"
 dependencies = [
   "fastmcp>=2.11,<3",
+  "fastapi>=0.115",
+]
+
+[project.optional-dependencies]
+vla = [
+  "torch>=2.2",
+  "torchvision>=0.17",
+  "transformers==5.3.0",
+  "safetensors>=0.4",
+  "huggingface_hub>=0.24",
+  "pillow>=10",
+  "num2words>=0.5",
 ]
 
 [project.scripts]
 norma-station-mcp = "norma_station_mcp.server:main"
+norma-station-http = "norma_station_mcp.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

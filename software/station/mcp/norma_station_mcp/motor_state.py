@@ -121,6 +121,23 @@ def find_bus(inference_state, bus_serial: str):
     return None
 
 
+_ERROR_FLAGS = [
+    (0, "voltage"),
+    (1, "angle_limit"),
+    (2, "overheat"),
+    (3, "range"),
+    (4, "checksum"),
+    (5, "overload"),
+    (6, "instruction"),
+]
+
+
+def decode_error_flags(status: int) -> list[str]:
+    if status == 0:
+        return []
+    return [name for bit, name in _ERROR_FLAGS if status & (1 << bit)]
+
+
 def normalized_to_steps(position: float, range_min: int, range_max: int) -> int:
     if position < 0.0 or position > 1.0:
         raise ValueError("position must be between 0.0 and 1.0")

@@ -14,18 +14,20 @@ Build a modern, single-page React dashboard for controlling a robotic arm. The d
 ## Layout
 
 Header bar at the top with:
-- App title "NormaCore" with a robot icon
+- App title "NormaCore" with a robot icon (left side)
 - Connection status indicator (green dot = connected, red = disconnected)
 - API URL config button (opens a modal to set the base URL)
+- **EMERGENCY STOP** button (right side of header, always visible) — large, red, pill-shaped button with a stop-circle icon. Pulses gently to draw attention. On click → `POST /api/emergency-stop` with body `{}`. Shows a brief confirmation toast. This button must be accessible from any screen state without scrolling.
 
 Below that, a **grid layout with 4 main panels**:
 
-### Panel 1 — Camera Feed (top-left, large)
-- Displays the live camera image from the robot's workspace
-- Poll `GET /api/camera` every 500ms when connected
-- The response has `image_base64` field (JPEG) — display as `<img src="data:image/jpeg;base64,{image_base64}" />`
-- Show "No Camera" placeholder with camera-off icon when unavailable
-- Show frame age from `frame_age_seconds` as a small badge
+### Panel 1 — Live Camera Feed (top-left, large)
+- Displays a live video stream from a **static external USB camera** that shows the full robot workspace from a fixed overhead/side angle — this is NOT the robot's onboard camera, it is a separate monitoring camera
+- The dashboard fetches the stream directly from the Pi's camera feed. The user configures the **Camera Stream URL** separately (stored in localStorage under `normacore_camera_url`). Add a camera URL field in the API config modal alongside the API base URL
+- **Primary mode**: display an `<img>` tag pointing to an MJPEG stream URL (e.g. `http://<pi-ip>:8081/stream`). This is a standard MJPEG-over-HTTP stream from a USB camera tool like `mjpg-streamer` or `ustreamer` running on the Pi
+- **Fallback mode**: if no camera stream URL is configured, fall back to polling `GET /api/camera` every 500ms (the robot's onboard 224x224 camera). Display as `<img src="data:image/jpeg;base64,{image_base64}" />`
+- Show "No Camera" placeholder with camera-off icon when neither source is available
+- Small badge in the corner showing which source is active ("External Cam" or "Robot Cam")
 
 ### Panel 2 — Robot State (top-right)
 - **Arm type** badge (e.g. "ElRobot" or "SO-101") from `GET /api/state` field `arm_type`
@@ -63,7 +65,7 @@ Split into tabs:
 **Tab 3 — System**
 - **Enable Torque** button (green) → `POST /api/torque/enable` with body `{}`
 - **Disable Torque** button (amber) → `POST /api/torque/disable` with body `{}`
-- **EMERGENCY STOP** button (large, red, prominent) → `POST /api/emergency-stop` with body `{}`
+- (Emergency Stop is in the header bar — always accessible, not duplicated here)
 - **VLA Status** section:
   - Shows model loaded/not loaded from `GET /api/vla/status` field `model_loaded`
   - If not loaded: text input for checkpoint path + "Load Model" button → `POST /api/vla/load` with `{"checkpoint_path": "..."}`
@@ -119,7 +121,8 @@ All errors return `{"error": "message"}` with appropriate HTTP status codes (400
 - Use `fetch()` for API calls — no axios needed
 - Handle CORS — the API has `Access-Control-Allow-Origin: *`
 - Store the API base URL in `localStorage` under key `normacore_api_url`
-- On first load, show a setup modal asking for the API URL
+- Store the external camera stream URL in `localStorage` under key `normacore_camera_url`
+- On first load, show a setup modal asking for both the API URL and the camera stream URL (camera URL is optional — leave blank to use the robot's onboard camera as fallback)
 - Add a connection check on startup: `GET /api/connection` — if it fails, show a "Disconnected" banner
 - All polling should stop when the tab is not visible (use `document.hidden`)
 - Add error boundaries so one failed panel doesn't crash the whole app
