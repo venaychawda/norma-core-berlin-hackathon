@@ -116,13 +116,75 @@ All endpoints are relative to the configurable base URL. All POST endpoints acce
 ### Error responses
 All errors return `{"error": "message"}` with appropriate HTTP status codes (400, 404, 500, 502, 504).
 
+## N8N Workflow Integration
+
+The dashboard connects to an N8N instance for automated workflows. The user configures the **N8N Webhook URL** in the setup modal (stored in `localStorage` under `normacore_n8n_url`, e.g. `http://192.168.137.104:5678`).
+
+### N8N Alerts Panel
+
+Add a **5th panel** below the Action Log (or as a collapsible section within it):
+- **Title**: "Automation Alerts" with a bell icon
+- Poll `GET /api/n8n/alerts?limit=10` every 5 seconds
+- Each alert shows:
+  - Severity badge: `critical` (red pulse), `warning` (amber), `info` (teal)
+  - Alert type (e.g. "connection_lost", "motor_health", "training_pipeline")
+  - Message text
+  - Timestamp (relative)
+- New alerts since last poll get a brief highlight animation
+- Show "No alerts" placeholder when empty
+
+### System Tab Additions (Panel 3, Tab 3)
+
+Add these controls to the existing System tab:
+
+**Run Demo Section:**
+- Text input: "Demo task..." (default: "pick up the pen")
+- Number input: "Steps" (default: 30)
+- **"Run Demo via N8N"** button (teal, with play icon) → `POST {n8n_url}/webhook/normacore-demo` with body:
+  ```json
+  {"task": "<user text>", "n_steps": <steps>}
+  ```
+- Show loading spinner while running (this can take 30-60s)
+- Display result in a toast and in the action log
+
+**Training Pipeline Section:**
+- Text input: "Dataset path" (default: `/home/venay/datasets/normacore`)
+- Number inputs: "Steps" (default: 5000), "Batch size" (default: 32)
+- **"Start Training Pipeline"** button (green, with rocket icon) → `POST {n8n_url}/webhook/normacore-train` with body:
+  ```json
+  {"dataset_path": "<path>", "steps": <steps>, "batch_size": <batch_size>}
+  ```
+- Responds immediately with 202 — show toast "Training pipeline started"
+- **"Training Complete"** button (amber, with download icon) — shown after training starts. When clicked → `POST {n8n_url}/webhook/normacore-training-complete` with body:
+  ```json
+  {"output_dir": "/home/venay/smolvla_checkpoint"}
+  ```
+- Training status is visible in the N8N Alerts panel (the pipeline sends progress alerts)
+
+### Setup Modal Updates
+
+Add a third field to the setup modal:
+- **N8N Webhook URL** — text input, optional, stored in `localStorage` as `normacore_n8n_url`
+- Placeholder: `http://192.168.137.104:5678`
+- If not configured, hide the "Run Demo via N8N" and "Start Training Pipeline" buttons
+
+### N8N API Reference
+
+| Endpoint | Method | Body | Description |
+|----------|--------|------|-------------|
+| `{api_url}/api/n8n/alerts?limit=10` | GET | — | Recent alerts from N8N workflows |
+| `{n8n_url}/webhook/normacore-demo` | POST | `{task, n_steps}` | Trigger demo task workflow |
+| `{n8n_url}/webhook/normacore-train` | POST | `{dataset_path, steps, batch_size}` | Start training pipeline |
+| `{n8n_url}/webhook/normacore-training-complete` | POST | `{output_dir}` | Deploy trained checkpoint |
+
 ## Technical Notes
 
 - Use `fetch()` for API calls — no axios needed
 - Handle CORS — the API has `Access-Control-Allow-Origin: *`
 - Store the API base URL in `localStorage` under key `normacore_api_url`
 - Store the external camera stream URL in `localStorage` under key `normacore_camera_url`
-- On first load, show a setup modal asking for both the API URL and the camera stream URL (camera URL is optional — leave blank to use the robot's onboard camera as fallback)
+- Store the N8N webhook URL in `localStorage` under key `normacore_n8n_url`
+- On first load, show a setup modal asking for the API URL, camera stream URL (optional), and N8N URL (optional)
 - Add a connection check on startup: `GET /api/connection` — if it fails, show a "Disconnected" banner
 - All polling should stop when the tab is not visible (use `document.hidden`)
 - Add error boundaries so one failed panel doesn't crash the whole app
