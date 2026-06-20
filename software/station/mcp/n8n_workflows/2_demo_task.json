@@ -1,0 +1,314 @@
+{
+  "name": "NormaCore Demo Task",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "normacore-demo",
+        "options": {
+          "responseMode": "lastNode"
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "Demo Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "webhookId": "normacore-demo"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/connection",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-connection",
+      "name": "Check Connection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "connected",
+              "leftValue": "={{ $json.connected }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-connected",
+      "name": "Connected?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/torque/enable",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "enable-torque",
+      "name": "Enable Torque",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/vla/status",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-vla",
+      "name": "Check VLA Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "model-loaded",
+              "leftValue": "={{ $json.model_loaded }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "vla-loaded",
+      "name": "VLA Loaded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1320, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/vla/load",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"checkpoint_path\": \"{{ $('Demo Webhook').item.json.body.checkpoint_path || $env.VLA_CHECKPOINT_PATH || '/home/venay/smolvla_checkpoint' }}\" }",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "load-vla",
+      "name": "Load VLA Model",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 100]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/vla/step",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"task\": \"{{ $('Demo Webhook').item.json.body.task || 'pick up the pen' }}\", \"n_steps\": {{ $('Demo Webhook').item.json.body.n_steps || 30 }} }",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "run-vla-task",
+      "name": "Run VLA Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/state/full",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "get-result",
+      "name": "Get Result State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "completed",
+              "type": "string"
+            },
+            {
+              "id": "task",
+              "name": "task",
+              "value": "={{ $('Demo Webhook').item.json.body.task || 'pick up the pen' }}",
+              "type": "string"
+            },
+            {
+              "id": "vla-result",
+              "name": "vla_result",
+              "value": "={{ JSON.stringify($('Run VLA Task').item.json) }}",
+              "type": "string"
+            },
+            {
+              "id": "final-state",
+              "name": "arm_state",
+              "value": "={{ JSON.stringify($json) }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "format-result",
+      "name": "Format Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2200, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error-status",
+              "name": "status",
+              "value": "error",
+              "type": "string"
+            },
+            {
+              "id": "error-msg",
+              "name": "message",
+              "value": "Station not connected. Start NormaCore Station first.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "not-connected-error",
+      "name": "Not Connected Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [880, 400]
+    }
+  ],
+  "connections": {
+    "Demo Webhook": {
+      "main": [
+        [
+          { "node": "Check Connection", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Connection": {
+      "main": [
+        [
+          { "node": "Connected?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Connected?": {
+      "main": [
+        [
+          { "node": "Enable Torque", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Not Connected Error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Enable Torque": {
+      "main": [
+        [
+          { "node": "Check VLA Status", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check VLA Status": {
+      "main": [
+        [
+          { "node": "VLA Loaded?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "VLA Loaded?": {
+      "main": [
+        [
+          { "node": "Run VLA Task", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Load VLA Model", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Load VLA Model": {
+      "main": [
+        [
+          { "node": "Run VLA Task", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Run VLA Task": {
+      "main": [
+        [
+          { "node": "Get Result State", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Result State": {
+      "main": [
+        [
+          { "node": "Format Result", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "normacore" },
+    { "name": "demo" }
+  ]
+}

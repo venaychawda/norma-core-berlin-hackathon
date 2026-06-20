@@ -1,0 +1,430 @@
+{
+  "name": "NormaCore SmolVLA Training Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "normacore-train",
+        "options": {
+          "responseMode": "responseNode"
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "Training Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "webhookId": "normacore-train"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=Training pipeline started at {{ $now.toISO() }}. Dataset: {{ $('Training Webhook').item.json.body.dataset_path || '/home/venay/datasets/normacore' }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "ack-response",
+      "name": "Acknowledge Start",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [440, 500]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dataset-path",
+              "name": "dataset_path",
+              "value": "={{ $('Training Webhook').item.json.body.dataset_path || '/home/venay/datasets/normacore' }}",
+              "type": "string"
+            },
+            {
+              "id": "output-dir",
+              "name": "output_dir",
+              "value": "={{ $('Training Webhook').item.json.body.output_dir || '/home/venay/smolvla_checkpoint' }}",
+              "type": "string"
+            },
+            {
+              "id": "steps",
+              "name": "training_steps",
+              "value": "={{ $('Training Webhook').item.json.body.steps || 5000 }}",
+              "type": "number"
+            },
+            {
+              "id": "batch-size",
+              "name": "batch_size",
+              "value": "={{ $('Training Webhook').item.json.body.batch_size || 32 }}",
+              "type": "number"
+            },
+            {
+              "id": "stage",
+              "name": "stage",
+              "value": "collecting_data",
+              "type": "string"
+            },
+            {
+              "id": "start-time",
+              "name": "started_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "setup-params",
+      "name": "Setup Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "command": "=ls -la {{ $json.dataset_path }}/*.parquet 2>/dev/null | wc -l",
+        "options": {}
+      },
+      "id": "check-dataset",
+      "name": "Check Dataset Exists",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-parquets",
+              "leftValue": "={{ parseInt($json.stdout) }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "dataset-exists",
+      "name": "Has Parquet Files?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "command": "=echo 'Generating dataset from recorded episodes...' && cd {{ $('Setup Parameters').item.json.dataset_path }} && ls -la *.parquet | head -5",
+        "options": {}
+      },
+      "id": "list-episodes",
+      "name": "List Episodes",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "command": "=echo 'Uploading dataset to Google Drive...' && rclone copy {{ $('Setup Parameters').item.json.dataset_path }} gdrive:normacore-training/ --progress 2>&1 | tail -5 || echo 'rclone not configured — manual upload needed. Dataset at: {{ $('Setup Parameters').item.json.dataset_path }}'",
+        "options": {
+          "timeout": 600
+        }
+      },
+      "id": "upload-drive",
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1320, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "stage-update",
+              "name": "stage",
+              "value": "training",
+              "type": "string"
+            },
+            {
+              "id": "colab-note",
+              "name": "colab_instructions",
+              "value": "=Open Google Colab notebook, set dataset_path to Google Drive location, run training for {{ $('Setup Parameters').item.json.training_steps }} steps with batch_size {{ $('Setup Parameters').item.json.batch_size }}",
+              "type": "string"
+            },
+            {
+              "id": "colab-config",
+              "name": "colab_config",
+              "value": "={ \"base_model\": \"lerobot/smolvla_base\", \"steps\": {{ $('Setup Parameters').item.json.training_steps }}, \"batch_size\": {{ $('Setup Parameters').item.json.batch_size }}, \"lr\": 1e-4 }",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "training-stage",
+      "name": "Training Stage",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1540, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ALERT_WEBHOOK_URL || 'http://localhost:8080/api/n8n/alert' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"alert_type\": \"training_pipeline\", \"stage\": \"{{ $json.stage }}\", \"message\": \"Dataset uploaded. {{ $json.colab_instructions }}\", \"config\": {{ $json.colab_config }}, \"severity\": \"info\", \"timestamp\": \"{{ $now.toISO() }}\" }",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "notify-upload-done",
+      "name": "Notify Upload Complete",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "normacore-training-complete",
+        "options": {
+          "responseMode": "lastNode"
+        }
+      },
+      "id": "training-complete-hook",
+      "name": "Training Complete Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 700],
+      "webhookId": "normacore-training-complete"
+    },
+    {
+      "parameters": {
+        "command": "=echo 'Downloading checkpoint from Google Drive...' && rclone copy gdrive:normacore-training/checkpoint {{ $json.body.output_dir || '/home/venay/smolvla_checkpoint' }} --progress 2>&1 | tail -5 || echo 'rclone not configured — manual download needed. Copy checkpoint to: {{ $json.body.output_dir || '/home/venay/smolvla_checkpoint' }}'",
+        "options": {
+          "timeout": 600
+        }
+      },
+      "id": "download-checkpoint",
+      "name": "Download Checkpoint",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [440, 700]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/vla/load",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"checkpoint_path\": \"{{ $json.body.output_dir || '/home/venay/smolvla_checkpoint' }}\" }",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "deploy-checkpoint",
+      "name": "Deploy to VLA Bridge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 700]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/vla/step",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"task\": \"move to center position\", \"n_steps\": 5 }",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "smoke-test",
+      "name": "Smoke Test VLA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 700],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "deploy-status",
+              "name": "status",
+              "value": "=deployed{{ $json.error ? '_with_errors' : '' }}",
+              "type": "string"
+            },
+            {
+              "id": "smoke-result",
+              "name": "smoke_test",
+              "value": "={{ $json.error ? 'FAILED: ' + $json.error : 'PASSED' }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "deploy-result",
+      "name": "Deploy Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1100, 700]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ALERT_WEBHOOK_URL || 'http://localhost:8080/api/n8n/alert' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"alert_type\": \"training_pipeline\", \"stage\": \"deployed\", \"message\": \"Checkpoint deployed. Smoke test: {{ $json.smoke_test }}\", \"severity\": \"{{ $json.status === 'deployed' ? 'info' : 'warning' }}\", \"timestamp\": \"{{ $json.timestamp }}\" }",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "notify-deploy",
+      "name": "Notify Deployment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 700],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "error-status",
+              "name": "status",
+              "value": "error",
+              "type": "string"
+            },
+            {
+              "id": "error-msg",
+              "name": "message",
+              "value": "No parquet files found. Record teleop demonstrations first.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "no-dataset-error",
+      "name": "No Dataset Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1100, 400]
+    }
+  ],
+  "connections": {
+    "Training Webhook": {
+      "main": [
+        [
+          { "node": "Setup Parameters", "type": "main", "index": 0 },
+          { "node": "Acknowledge Start", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Setup Parameters": {
+      "main": [
+        [
+          { "node": "Check Dataset Exists", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Dataset Exists": {
+      "main": [
+        [
+          { "node": "Has Parquet Files?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Has Parquet Files?": {
+      "main": [
+        [
+          { "node": "List Episodes", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "No Dataset Error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "List Episodes": {
+      "main": [
+        [
+          { "node": "Upload to Google Drive", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Upload to Google Drive": {
+      "main": [
+        [
+          { "node": "Training Stage", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Training Stage": {
+      "main": [
+        [
+          { "node": "Notify Upload Complete", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Training Complete Webhook": {
+      "main": [
+        [
+          { "node": "Download Checkpoint", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Download Checkpoint": {
+      "main": [
+        [
+          { "node": "Deploy to VLA Bridge", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Deploy to VLA Bridge": {
+      "main": [
+        [
+          { "node": "Smoke Test VLA", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Smoke Test VLA": {
+      "main": [
+        [
+          { "node": "Deploy Result", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Deploy Result": {
+      "main": [
+        [
+          { "node": "Notify Deployment", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "normacore" },
+    { "name": "training" }
+  ]
+}

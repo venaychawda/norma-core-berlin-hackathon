@@ -1,0 +1,292 @@
+{
+  "name": "NormaCore Health Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/health",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-health",
+      "name": "Check Motor Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NORMACORE_API_URL || 'http://localhost:8080' }}/api/connection",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-connection",
+      "name": "Check Connection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-errors",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "check-errors",
+      "name": "Has Errors?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "conn-error",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "check-conn-errors",
+      "name": "Connection OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 500]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "alert-msg",
+              "name": "alert_type",
+              "value": "motor_health",
+              "type": "string"
+            },
+            {
+              "id": "alert-detail",
+              "name": "message",
+              "value": "=Motor health check failed: {{ $json.error || 'Unknown error' }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "severity",
+              "name": "severity",
+              "value": "warning",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "motor-alert",
+      "name": "Motor Alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "alert-msg",
+              "name": "alert_type",
+              "value": "connection_lost",
+              "type": "string"
+            },
+            {
+              "id": "alert-detail",
+              "name": "message",
+              "value": "=Station connection lost: {{ $json.error || 'Unreachable' }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "severity",
+              "name": "severity",
+              "value": "critical",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "conn-alert",
+      "name": "Connection Alert",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [880, 400]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ALERT_WEBHOOK_URL || 'http://localhost:8080/api/n8n/alert' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "alert_type",
+              "value": "={{ $json.alert_type }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.message }}"
+            },
+            {
+              "name": "severity",
+              "value": "={{ $json.severity }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ $json.timestamp }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "send-alert",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {},
+      "id": "healthy-noop",
+      "name": "All Healthy",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [880, 600]
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          { "node": "Check Motor Health", "type": "main", "index": 0 },
+          { "node": "Check Connection", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Motor Health": {
+      "main": [
+        [
+          { "node": "Has Errors?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Connection": {
+      "main": [
+        [
+          { "node": "Connection OK?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Has Errors?": {
+      "main": [
+        [
+          { "node": "Motor Alert", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "All Healthy", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Connection OK?": {
+      "main": [
+        [
+          { "node": "Connection Alert", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "All Healthy", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Motor Alert": {
+      "main": [
+        [
+          { "node": "Send Alert", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Connection Alert": {
+      "main": [
+        [
+          { "node": "Send Alert", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "normacore" },
+    { "name": "monitoring" }
+  ]
+}
