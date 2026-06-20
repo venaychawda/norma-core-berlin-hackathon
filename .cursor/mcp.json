@@ -11,7 +11,8 @@
         "norma_station_mcp"
       ],
       "env": {
-        "STATION_HOST": "localhost:8888"
+        "STATION_HOST": "localhost:8888",
+        "DEFAULT_BUS_SERIAL": "5B61037157"
       }
     }
   }

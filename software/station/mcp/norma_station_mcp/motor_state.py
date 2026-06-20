@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import struct
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -78,19 +79,30 @@ def resolve_bus_serial(inference_state, requested: str) -> str:
         raise RuntimeError("No ST3215 buses reported by station")
 
     if requested == "auto":
-        if len(buses) != 1:
-            serials = [
-                b.get_bus().get_serial_number()
-                for b in buses
-                if b.get_bus()
-            ]
+        default = os.environ.get("DEFAULT_BUS_SERIAL")
+        if len(buses) == 1:
+            info = buses[0].get_bus()
+            if info is None:
+                raise RuntimeError("Bus has no metadata")
+            return info.get_serial_number()
+        if default:
+            for bus in buses:
+                info = bus.get_bus()
+                if info and info.get_serial_number() == default:
+                    return default
+            serials = [b.get_bus().get_serial_number() for b in buses if b.get_bus()]
             raise RuntimeError(
-                f"bus_serial='auto' requires exactly one bus, found {len(buses)}: {serials}"
+                f"DEFAULT_BUS_SERIAL='{default}' not found. Available: {serials}"
             )
-        info = buses[0].get_bus()
-        if info is None:
-            raise RuntimeError("Bus has no metadata")
-        return info.get_serial_number()
+        serials = [
+            b.get_bus().get_serial_number()
+            for b in buses
+            if b.get_bus()
+        ]
+        raise RuntimeError(
+            f"bus_serial='auto' requires exactly one bus, found {len(buses)}: {serials}. "
+            f"Set DEFAULT_BUS_SERIAL env var or pass bus_serial explicitly."
+        )
 
     for bus in buses:
         info = bus.get_bus()
