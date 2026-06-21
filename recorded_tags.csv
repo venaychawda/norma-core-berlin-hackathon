@@ -1,0 +1,23 @@
+S.No.,Tag_Name,Task_Instruction,Objects_needed,start_frame_number,end_frame_number
+1,push-block-forward,"push the block forward",1 small block,11337141,11435319
+2,push-block-forward1,"push the block forward",1 small block,11545193,11589567
+3,push-block-forward2,"push the block forward",1 small block,11626365,11716111
+4,push-block-forward3,"push the block forward",1 small block,11906884,11972435
+5,pick-up-block,"pick up the block",1 small block,12050501,12181266
+6,pick-up-block1,"pick up the block",1 small block,12216822,12318100
+7,pick-up-block2,"pick up the block",1 small block,12363442,12458617
+8,pick-up-block3,"pick up the block",1 small block,12511927,12614488
+9,pick-up-put-down-block1,"pick up the block and put it down",1 small block,12792728,12952275
+10,pick-up-put-down-block2,"pick up the block and put it down",1 small block,13055243,13139592
+11,pick-up-pen,"pick up the pen",1 pen/marker,13342202,13418335
+12,pick-up-pen1,"pick up the pen",1 pen/marker,13454579,13613670
+13,pick-up-pen2,"pick up the pen",1 pen/marker,14310477,14412714
+14,pick-up-bottle-cap,"pick up the bottle cap",1 bottle cap,14492489,14588205
+15,pick-up-bottle-cap1,"pick up the bottle cap",1 bottle cap,14619248,14740160
+16,pick-up-bottle-cap2,"pick up the bottle cap",1 bottle cap,14769077,14832561
+17,pick-up-bottle-cap3,"pick up the bottle cap",1 bottle cap,14891448,14974633
+18,pick-up-bottle-cap4,"pick up the bottle cap",1 bottle cap,14998434,15101611
+19,pick-up-ball,"pick up the ball",1 small soft ball,15189130,15312096
+20,pick-up-ball1,"pick up the ball",1 small soft ball,15345758,15448760
+21,pick-up-ball2,"pick up the ball",1 small soft ball,15473448,15559729
+22,place-block-on-plate,"place the block on the plate",block + small plate,15857707,16130414
