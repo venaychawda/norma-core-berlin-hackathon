@@ -3,3 +3,4 @@
 __pycache__
 # Local vendored JS package tarballs for offline installs.
 js-vendor/
+software/ai/smolvla_py/smolvla-bundle.zip
