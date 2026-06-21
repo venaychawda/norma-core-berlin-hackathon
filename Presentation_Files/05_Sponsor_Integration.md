@@ -2,7 +2,7 @@
 
 ## Hugging Face
 
-### Role: AI Model Hub + Training Infrastructure
+### Role: AI Model Hub + Training Infrastructure + GPU Compute
 
 **How we use it:**
 
@@ -10,23 +10,68 @@
 |---|---|
 | Base Model | `lerobot/smolvla_base` — 450M param VLA model (SmolVLM2 + action expert) |
 | Pre-trained Checkpoint | `LBST/t01_pick_and_place` — SO-101 pick-place, fine-tuned from base |
-| Public Datasets | `lerobot/svla_so101_pickplace` (50 episodes), `sebobo/pickplace` (50 episodes) |
+| Dataset Hosting | `venaychawda/elrobot-pickplace` — our 12 episodes, 5,099 frames uploaded to HF Hub |
+| GPU Training | HF Spaces with Nvidia L4 (24GB VRAM) — fine-tune SmolVLA in ~20 min for ~$0.27 |
 | Model Download | `huggingface_hub.snapshot_download()` for checkpoint retrieval |
 | Transformers | SmolVLM2-500M-Video-Instruct as the frozen vision-language backbone |
 | Community | 29+ SmolVLA community fine-tunes for reference (garlic, monster truck, cube) |
 
-**Impact:** Without HuggingFace's SmolVLA base model and the LeRobot community datasets, training a VLA from scratch would require 100x more data and compute. We fine-tune from a model that already understands robotic manipulation — our 50 demonstrations teach it our specific workspace.
+### Training on HuggingFace Spaces
+
+We use HF Spaces as our **GPU training infrastructure** — the Raspberry Pi 5 has no GPU, so training happens in the cloud:
+
+```
+┌─────────────────┐     ┌───────────────────┐     ┌─────────────────┐
+│  Pi 5 (record)  │────▶│  HF Hub (dataset) │────▶│  HF Space (GPU) │
+│  Teleoperation  │     │  12 parquets      │     │  L4 24GB VRAM   │
+│  → Export       │     │  128 MB           │     │  Fine-tune 20m  │
+└─────────────────┘     └───────────────────┘     └────────┬────────┘
+                                                            │
+┌─────────────────┐     ┌───────────────────┐              │
+│  Pi 5 (deploy)  │◀────│  HF Hub (model)   │◀─────────────┘
+│  CPU inference  │     │  Trained ckpt     │
+│  → Robot moves  │     │  ~900 MB          │
+└─────────────────┘     └───────────────────┘
+```
+
+| Step | Platform | Time | Cost |
+|---|---|---|---|
+| Upload dataset | HF Hub | 2 min | Free |
+| Fine-tune (5K steps) | HF Space (L4) | ~20 min | ~$0.27 |
+| Download checkpoint | HF Hub → Pi | 3 min | Free |
+| **Total** | | **~25 min** | **~$0.27** |
+
+**Why HF over Google Colab:**
+- No session timeouts (Colab disconnects after 90 min idle)
+- Guaranteed GPU availability (Colab free tier queues)
+- Dataset + model + training in one ecosystem
+- Auto-push trained checkpoint back to Hub
+
+### Impact
+
+HuggingFace provides the complete ML lifecycle for our project:
+1. **Pre-training** — SmolVLA base model (trained by HF on community data)
+2. **Transfer learning** — LBST checkpoint (community fine-tune on SO-101)
+3. **Dataset hosting** — our ElRobot parquets versioned on Hub
+4. **GPU compute** — L4 Spaces for fine-tuning ($0.27 per run)
+5. **Model serving** — trained checkpoint hosted for download to Pi
+
+Without HuggingFace, training a VLA from scratch would require 100x more data and thousands of dollars in compute. We fine-tune from a model that already understands robotic manipulation — our demonstrations teach it our specific arm and workspace.
 
 **Code integration:**
 ```python
 from huggingface_hub import snapshot_download
 from smolvla import SmolVLAPolicy
 
-# Download pre-trained checkpoint
+# Download pre-trained checkpoint from HF Hub
 path = snapshot_download('LBST/t01_pick_and_place')
 
 # Load and fine-tune
-policy = SmolVLAPolicy.from_pretrained(path, config_overrides={...})
+policy = SmolVLAPolicy.from_pretrained(path, config_overrides={
+    "image_keys": ["observation.images.cam0"],
+    "state_dim": 8,   # ElRobot 8-DOF
+    "action_dim": 8,
+})
 ```
 
 ---
